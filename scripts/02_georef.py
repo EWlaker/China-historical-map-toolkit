@@ -76,6 +76,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("--dry-run", action="store_true", help="只打印换算, 不写文件")
+    ap.add_argument("only", nargs="*",
+                    help="只配准这些图幅(文件名不含 _inner.png), 便于单幅返工")
     a = ap.parse_args()
 
     cfgp = Path(a.config)
@@ -96,6 +98,17 @@ def main():
     srcs = sorted(p for p in Path(crop_dir).glob("*_inner.png"))
     if not srcs:
         sys.exit("裁切目录没有 *_inner.png: %s" % crop_dir)
+
+    # 只配准指定图幅: 单幅返工时不必把几百幅全部重写一遍。
+    #   python scripts/02_georef.py 1117-分水嘴
+    if a.only:
+        want = set(a.only)
+        srcs = [p for p in srcs
+                if (p.stem[:-len("_inner")] if p.stem.endswith("_inner") else p.stem) in want]
+        if not srcs:
+            sys.exit("指定的图幅在裁切目录里找不到: %s" % ", ".join(sorted(want)))
+        print("只处理指定图幅: %s" % ", ".join(sorted(want)))
+
     os.makedirs(geo_dir, exist_ok=True)
 
     rows, skipped = [], []
@@ -131,14 +144,27 @@ def main():
         print("  ... (--dry-run, 未写文件)")
         return 0
 
+    # 清单同样用合并写入 —— 只配准单幅时不能把其余几百条记录冲掉。
     man = os.path.join(geo_dir, "sheet_manifest.csv")
+    merged = {}
+    if os.path.exists(man):
+        try:
+            for r in csv.DictReader(open(man, encoding="utf-8-sig")):
+                if r.get("sheet_no"):
+                    merged[r["sheet_no"]] = r
+        except Exception:
+            pass
+    for x in rows:
+        merged[x["sheet_no"]] = {k: x[k] for k in
+                                 ["sheet_no", "C", "R", "name", "lon_min",
+                                  "lat_min", "lon_max", "lat_max", "file"]}
     with open(man, "w", encoding="utf-8-sig", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=["sheet_no", "C", "R", "name", "lon_min",
                                            "lat_min", "lon_max", "lat_max", "file"])
         wr.writeheader()
-        for x in rows:
-            wr.writerow({k: x[k] for k in wr.fieldnames})
-    print("清单:", man)
+        for k in sorted(merged):
+            wr.writerow(merged[k])
+    print("清单: %s  (累计 %d 条)" % (man, len(merged)))
 
     prof_common = dict(driver="GTiff", count=1, dtype="uint8", crs="EPSG:4326",
                        compress=gr.get("compress", "DEFLATE"), tiled=True,

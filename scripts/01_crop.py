@@ -154,8 +154,18 @@ def content_extent(region, thr, win):
 #  主流程
 # --------------------------------------------------------------------------- #
 def process_one(path, cfg, name):
-    c = cfg["crop"]
+    c = dict(cfg["crop"])                 # 复制一份, 便于逐幅覆盖
+    # 逐幅参数覆盖: 个别图幅(如大片湖区、内容极稀疏)需要单独放宽阈值时用,
+    # 不必为了一幅去改全局参数, 更不必把全部图幅重跑一遍。
+    # 配置写法:
+    #   crop:
+    #     per_sheet:
+    #       "1117-分水嘴": {density_threshold: 0.06}
+    ov = (c.get("per_sheet") or {}).get(name) or {}
+    c.update(ov)
     rec = {"file": name, "status": "ok"}
+    if ov:
+        rec["per_sheet"] = ov
     img = imread_bgr(path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -273,10 +283,26 @@ def main():
     ok = sum(1 for r in recs if r.get("status") == "ok")
     safe = sum(1 for r in recs if r.get("flag") == "safe")
     rep = os.path.join(cro, "crop_report.json")
+
+    # 合并写入: 只跑单幅时不要冲掉其余图幅的历史记录。
+    # 否则 `python scripts/01_crop.py 1117-分水嘴` 会把几百条报告变成 1 条,
+    # 之后想回顾"哪几幅走过安全兜底"就没数据了。
+    old = {}
+    if os.path.exists(rep):
+        try:
+            for r in json.load(open(rep, encoding="utf-8")):
+                if r.get("file"):
+                    old[r["file"]] = r
+        except Exception:
+            pass
+    for r in recs:
+        old[r["file"]] = r
     with open(rep, "w", encoding="utf-8") as f:
-        json.dump(recs, f, ensure_ascii=False, indent=1)
-    print("\n完成 %d/%d  其中安全兜底 %d 幅   耗时 %.0fs" % (ok, len(recs), safe, time.time() - t0))
-    print("报告:", rep)
+        json.dump([old[k] for k in sorted(old)], f, ensure_ascii=False, indent=1)
+
+    print("\n完成 %d/%d  其中安全兜底 %d 幅   耗时 %.0fs"
+          % (ok, len(recs), safe, time.time() - t0))
+    print("报告: %s  (累计 %d 条)" % (rep, len(old)))
     return 0
 
 
