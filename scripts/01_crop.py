@@ -235,8 +235,32 @@ def process_one(path, cfg, name):
         rec.update(status="fail", reason="裁切区域过小")
         return rec
 
-    ow, oh = c.get("out_size", [4500, 3500])
-    crop = cv2.resize(img[y0:y1, x0:x1], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
+    crop = img[y0:y1, x0:x1]
+    sz = c.get("out_size")
+    if not sz or sz[0] in (None, 0) or sz[1] in (None, 0):
+        # out_size: null —— 保持裁切后的原始像素, 不缩放。
+        # 适用于"只想裁掉黑边白边"、不需要统一尺寸的场景。
+        rec["out_size"] = "original"
+    elif c.get("keep_aspect"):
+        # keep_aspect: true —— 按内容比例缩放, 居中补白到 out_size。
+        # 不会拉伸变形, 代价是四周可能有一圈很窄的白边。
+        # 图幅比例与 out_size 差得较多时必须用它, 否则内容会被拉扭。
+        oh_, ow_ = sz[1], sz[0]
+        hh, ww = crop.shape[:2]
+        scale = min(ow_ / ww, oh_ / hh)
+        nw, nh = max(1, int(round(ww * scale))), max(1, int(round(hh * scale)))
+        resized = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LANCZOS4)
+        canvas = np.full((oh_, ow_, 3), 255, np.uint8)
+        ox, oy = (ow_ - nw) // 2, (oh_ - nh) // 2
+        canvas[oy:oy + nh, ox:ox + nw] = resized
+        crop = canvas
+        rec["out_size"] = "keep_aspect"
+    else:
+        # 默认: 强制缩放到 out_size。配合经纬度网格使用 ——
+        # 图幅本来就要铺满固定的经纬度矩形, 轻微拉伸是预期行为。
+        crop = cv2.resize(crop, (sz[0], sz[1]), interpolation=cv2.INTER_LANCZOS4)
+        rec["out_size"] = "%dx%d" % (sz[0], sz[1])
+
     out = os.path.join(cfg["_crop_dir"], name + "_inner.png")
     imwrite_png(out, cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
 
@@ -245,15 +269,85 @@ def process_one(path, cfg, name):
     return rec
 
 
+def parse_size(token):
+    """解析命令行给的尺寸。接受这几种写法:
+         3000x2000    3000X2000    3000*2000    3000,2000
+         3000x2000k   —— 末尾加 k 表示"保持比例、居中补白"(不拉伸变形)
+         original     (或 none / null) 不缩放, 保持裁切后的原始像素
+    返回 (size, keep_aspect):
+         size = [w, h] 或 "original" 或 None
+         keep_aspect = True / False / None(不覆盖配置)
+    """
+    if token is None:
+        return None, None
+    t = str(token).strip().lower()
+    if t in ("original", "orig", "none", "null", "原始"):
+        return "original", None
+
+    keep = None
+    if t.endswith("k"):                 # 3000x2000k -> 保持比例
+        keep = True
+        t = t[:-1].strip()
+        if not t:
+            raise SystemExit("尺寸格式不对。k 前面要有尺寸，例如： 3000x2000k")
+
+    joined = t.replace("x", ",").replace("*", ",").replace("，", ",")
+    parts = [p for p in joined.split(",") if p]
+    if len(parts) != 2:
+        raise SystemExit("尺寸格式不对，应为 宽x高。例如： -s 3000x2000\n"
+                         "（末尾加 k 表示保持比例： -s 3000x2000k）")
+    try:
+        w, h = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise SystemExit("尺寸必须是整数。例如： -s 3000x2000")
+    if w < 100 or h < 100:
+        raise SystemExit("尺寸太小了（至少 100x100）： %dx%d" % (w, h))
+    return [w, h], keep
+
+
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="批量裁切历史地形图扫描件",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="例：\n"
+               "  python scripts/01_crop.py -s 3000x2000                 指定输出尺寸\n"
+               "  python scripts/01_crop.py -s 3000x2000 --keep-aspect   保持比例、居中补白\n"
+               "  python scripts/01_crop.py -s original                  不缩放，保留原始像素\n"
+               "  python scripts/01_crop.py -s 3000x2000 1117-分水嘴      只重跑某一幅\n")
     ap.add_argument("-c", "--config", default="config.yaml")
+    ap.add_argument("-s", "--size", metavar="WxH",
+                    help="输出尺寸，覆盖配置文件里的 out_size。"
+                         "如 3000x2000；写 original 表示不缩放")
+    ap.add_argument("--keep-aspect", action="store_true", default=None,
+                    help="保持比例缩放、居中补白（不拉伸变形）")
+    ap.add_argument("--stretch", action="store_true", default=None,
+                    help="强制拉伸到指定尺寸（与 --keep-aspect 相反）")
     ap.add_argument("only", nargs="*", help="只处理这些文件名(不含扩展名)")
     a = ap.parse_args()
 
     cfg = load_config(a.config)
     inp, cro = cfg["_input_dir"], cfg["_crop_dir"]
     os.makedirs(cro, exist_ok=True)
+
+    # 命令行覆盖配置
+    cmd_size, cmd_keep = parse_size(a.size)
+    if cmd_size == "original":
+        cfg["crop"]["out_size"] = None
+        print("输出尺寸：保持原始像素（命令行指定）")
+    elif cmd_size:
+        cfg["crop"]["out_size"] = cmd_size
+        print("输出尺寸：%d x %d（命令行指定，覆盖配置）" % (cmd_size[0], cmd_size[1]))
+    if cmd_keep:
+        cfg["crop"]["keep_aspect"] = True
+        print("缩放方式：保持比例，居中补白（尺寸末尾的 k）")
+    if a.keep_aspect:
+        cfg["crop"]["keep_aspect"] = True
+        print("缩放方式：保持比例，居中补白")
+    elif a.stretch:
+        cfg["crop"]["keep_aspect"] = False
+        print("缩放方式：强制拉伸到目标尺寸")
+    if cmd_size or cmd_keep or a.keep_aspect or a.stretch:
+        print()
 
     excl = set(cfg["crop"].get("exclude", []))
     files = sorted(p for p in Path(inp).iterdir()
