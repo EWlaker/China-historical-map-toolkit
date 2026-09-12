@@ -14,11 +14,17 @@
 > 那份文档从"怎么装 Python"讲起，全程只需双击 `.bat` 文件。
 > 本文面向有一点技术基础的使用者。
 
-<!--
-  截图建议（放到 docs/images/ 下，取消注释即可显示）：
-  ![处理前后对比](docs/images/before-after.png)
-  ![整体拼接效果](docs/images/mosaic.png)
--->
+![处理前后对比](docs/images/before-after.jpg)
+
+*左：原始扫描件（歪斜、带图框黑边、四周纸白）。右：纠斜并裁到内容边界之后。*
+
+![整体拼接效果](docs/images/mosaic.jpg)
+
+*各图幅按编号行列排布后的拼接效果（对应 `mosaic.vrt`）。*
+
+> 上图使用程序生成的**合成示例数据**绘制，目的是展示流程效果，
+> 不涉及任何真实地图的版权。换成你自己的成果截图会更有说服力，
+> 替换 `docs/images/` 下的同名文件即可。
 
 ---
 
@@ -217,7 +223,8 @@ historical-map-toolkit/
 │   └── 02_geo/                  配准成果 + sheet_manifest.csv + mosaic.vrt
 ├── docs/
 │   ├── 原理与踩坑.md
-│   └── 参数调优.md
+│   ├── 参数调优.md
+│   └── images/                  示意图（README 引用）
 └── scripts/
     ├── 00_make_sample.py        生成合成示例（仅用于自测）
     ├── 01_crop.py               纠斜 → 外框 → 内容边界 → 定尺寸输出
