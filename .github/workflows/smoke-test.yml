@@ -1,0 +1,60 @@
+name: smoke-test
+
+# 目的: 每次 push / PR 都从零跑一遍完整流程,
+#       确保"克隆下来就能用"这件事一直成立。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  end-to-end:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 准备配置（模拟 clone 后的首次使用）
+        shell: bash
+        run: cp config.example.yaml config.yaml
+
+      - name: 生成示例数据
+        run: python scripts/00_make_sample.py
+
+      - name: 裁切
+        run: python scripts/01_crop.py
+
+      - name: 配准
+        run: python scripts/02_georef.py
+
+      - name: 生成 VRT
+        run: python scripts/03_build_vrt.py
+
+      - name: 自查（非 0 退出码会让 CI 失败）
+        run: python scripts/tools/check_outputs.py
+
+      - name: 校验产出确实存在
+        shell: bash
+        run: |
+          set -e
+          n_png=$(ls work/01_crop/*_inner.png | wc -l)
+          n_tif=$(ls work/02_geo/*_geo.tif | wc -l)
+          echo "裁切 $n_png 幅 / 配准 $n_tif 幅"
+          test "$n_png" -eq 6
+          test "$n_tif" -eq 6
+          test -f work/02_geo/mosaic.vrt

@@ -1,0 +1,32 @@
+# 本地配置: 含你自己的路径与图集参数, 不要提交
+config.yaml
+
+# 数据目录: 扫描件与成果体积大, 且可能涉及版权, 不入库
+# 注意: 示例数据也在 input/ 里, 同样不入库 —— clone 后请先跑
+#       python scripts/00_make_sample.py 生成, 或双击"生成示例数据.bat"
+input/
+work/
+
+# 运行时产生的日志与临时输出
+_out*.txt
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 任何凭据一律不要入库(本工具包本不需要凭据, 此处为兜底)
+*.key
+*.pem
+.env
+.env.*
+credentials.json

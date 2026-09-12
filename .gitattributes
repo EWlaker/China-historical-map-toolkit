@@ -1,0 +1,32 @@
+# Git 属性配置
+# 作用: 避免 Git 自动转换把文件弄坏, 尤其是 GBK 编码的 Windows 批处理文件。
+
+# 默认: 自动识别文本, 统一用 LF 换行
+* text=auto eol=lf
+
+# ---------------------------------------------------------------
+# Windows 批处理文件 —— 必须原样保存, 绝不能让 Git 碰
+#
+# 原因: 这两个 .bat 是 GBK 编码(中文 Windows 的 cmd 用 GBK 解析批处理),
+#       如果按文本处理, Git 会做换行转换甚至编码推测, 结果就是
+#       中文变乱码、命令行被拆断, 用户双击直接报错。
+#       标记为 binary 即可让 Git 完全不做处理。
+# ---------------------------------------------------------------
+*.bat binary
+
+# 图片与压缩包 (二进制)
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.tif  binary
+*.tiff binary
+*.zip  binary
+
+# 数据与凭据 —— 保险起见明确标记
+*.csv  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.txt  text eol=lf
