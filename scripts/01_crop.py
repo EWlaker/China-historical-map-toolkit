@@ -378,6 +378,9 @@ def main():
                     help="保持比例缩放、居中补白（不拉伸变形）")
     ap.add_argument("--stretch", action="store_true", default=None,
                     help="强制拉伸到指定尺寸（与 --keep-aspect 相反）")
+    ap.add_argument("--color", choices=["auto", "gray", "color"], default=None,
+                    help="输出色彩，覆盖配置里的 crop.color："
+                         "auto=自动判断(默认)  gray=强制灰度  color=强制彩色")
     ap.add_argument("only", nargs="*", help="只处理这些文件名(不含扩展名)")
     a = ap.parse_args()
 
@@ -402,7 +405,12 @@ def main():
     elif a.stretch:
         cfg["crop"]["keep_aspect"] = False
         print("缩放方式：强制拉伸到目标尺寸")
-    if cmd_size or cmd_keep or a.keep_aspect or a.stretch:
+    if a.color:
+        cfg["crop"]["color"] = {"auto": "auto", "gray": "grayscale",
+                                "color": "color"}[a.color]
+        print("输出色彩：%s" % {"auto": "自动判断", "gray": "强制灰度",
+                                "color": "强制彩色"}[a.color])
+    if cmd_size or cmd_keep or a.keep_aspect or a.stretch or a.color:
         print()
 
     excl = set(cfg["crop"].get("exclude", []))

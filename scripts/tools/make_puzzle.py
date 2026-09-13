@@ -162,17 +162,20 @@ HTML = r"""<!DOCTYPE html>
 <dialog id="dlgAsm">
   <div class="dlg-h">一键生成拼图</div>
   <div class="dlg-b">
-    <p class="stat">选一个清晰度，然后点下面的按钮。</p>
+    <p class="stat">勾选想要的清晰度（<b>可以多选，一次全出</b>）。
+       每一档会生成单独的文件，互不覆盖。</p>
     <div class="qopts">
-      <label><input type="radio" name="q" value="1" checked>
+      <label><input type="checkbox" name="q" value="1" checked>
         <b>预览</b><span>体积小、几秒钟，用来检查拼得对不对</span></label>
-      <label><input type="radio" name="q" value="2">
+      <label><input type="checkbox" name="q" value="2">
         <b>清晰</b><span>适合在电脑上看、放进 PPT</span></label>
-      <label><input type="radio" name="q" value="3">
+      <label><input type="checkbox" name="q" value="3">
         <b>打印</b><span>体积较大，适合打印</span></label>
-      <label><input type="radio" name="q" value="4">
+      <label><input type="checkbox" name="q" value="4">
         <b>存档</b><span>原始分辨率，可能要等一会儿</span></label>
     </div>
+    <p class="stat" style="margin-top:10px">
+      文件名会带上档位，例如 <code>拼图_预览.jpg</code>、<code>拼图_存档.jpg</code>。</p>
     <div id="asmMsg" class="stat" style="margin-top:12px"></div>
   </div>
   <div class="dlg-f">
@@ -528,12 +531,15 @@ document.getElementById('btnAssemble').onclick = ()=>{
 document.getElementById('btnAsmCancel').onclick = ()=>dlgAsm.close();
 
 document.getElementById('btnAsmGo').onclick = async ()=>{
-  const q = document.querySelector('input[name="q"]:checked').value;
+  const qs = [...document.querySelectorAll('input[name="q"]:checked')]
+               .map(el => parseInt(el.value, 10)).sort((a, b) => a - b);
   const go = document.getElementById('btnAsmGo');
+  if (!qs.length){ asmMsg.textContent = '请至少勾选一个清晰度。'; return; }
   go.disabled = true;
-  asmMsg.textContent = '正在生成，请稍等……（幅数多时要一会儿）';
+  asmMsg.textContent = '正在生成 ' + qs.length + ' 个文件，请稍等……' +
+                       (qs.includes(4) ? '（含存档档，可能要等一会儿）' : '');
   const L = buildLayout();
-  L.quality = parseInt(q, 10);
+  L.qualities = qs;
   try {
     const r = await fetch('/assemble', {
       method: 'POST',
@@ -542,10 +548,11 @@ document.getElementById('btnAsmGo').onclick = async ()=>{
     });
     const j = await r.json();
     if (j.ok){
-      asmMsg.innerHTML = '✅ 拼好了：<b>' + j.file + '</b><br>' +
-        j.w + ' × ' + j.h + ' 像素　' + j.mb + ' MB<br>成果文件夹已打开。' +
-        '<br><br>想换个清晰度再来一次？直接改上面的选项再点按钮就行。';
-      go.disabled = false;        // 恢复按钮，方便换清晰度重生成
+      asmMsg.innerHTML = '✅ 拼好了 ' + j.files.length + ' 个文件：<br>' +
+        j.files.map(f => '　• <b>' + f.name + '</b>　' + f.w + '×' + f.h +
+                         '　' + f.mb + ' MB').join('<br>') +
+        '<br><br>成果文件夹已打开。想换档位再来一次？直接改勾选再点按钮就行。';
+      go.disabled = false;        // 恢复按钮，方便换档位重生成
     } else {
       asmMsg.textContent = '生成失败：' + (j.error || '未知原因');
       go.disabled = false;
@@ -598,16 +605,24 @@ window.addEventListener('dragover', e=>e.preventDefault());
 
 
 def do_assemble(base, layout):
-    """按布局拼接。layout 来自网页，含 quality 字段。
+    """按布局拼接，可一次出多档。
 
-    直接用 subprocess 跑 assemble_by_layout.py —— 逻辑只有一份，
-    不在这里重复实现，免得两边行为不一致。
+    layout 里 qualities 是档位列表（1预览 2清晰 3打印 4存档）。
+    每档写单独的文件名，互不覆盖 —— 原来写死 assembled.jpg，
+    换个档位就把上一档盖掉了。
     """
     import json as _json
     import subprocess
 
-    quality = int(layout.pop("quality", 1))
-    SCALE = {1: 0.35, 2: 0.6, 3: 0.8, 4: 1.0}[quality]
+    qs = layout.pop("qualities", None)
+    if not qs:
+        qs = [int(layout.pop("quality", 1))]      # 兼容旧格式
+    qs = sorted({int(q) for q in qs if int(q) in (1, 2, 3, 4)})
+    if not qs:
+        raise RuntimeError("没有指定清晰度")
+
+    SCALE = {1: 0.35, 2: 0.6, 3: 0.8, 4: 1.0}
+    LABEL = {1: "预览", 2: "清晰", 3: "打印", 4: "存档"}
 
     tmp = os.path.join(base, "work", "_layout_from_page.json")
     os.makedirs(os.path.dirname(tmp), exist_ok=True)
@@ -619,28 +634,33 @@ def do_assemble(base, layout):
         raise RuntimeError("找不到 assemble_by_layout.py")
     outdir = os.path.join(base, "work", "03_assembly")
     os.makedirs(outdir, exist_ok=True)
-    out = os.path.join(outdir, "assembled.jpg")
-
-    cmd = [sys.executable, script, tmp, "-o", out, "--jpg"]
-    if SCALE != 1.0:
-        cmd += ["-s", str(SCALE)]
-
-    r = subprocess.run(cmd, cwd=base, capture_output=True, text=True,
-                       encoding="gbk", errors="replace")
-    if r.returncode != 0:
-        tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-        raise RuntimeError(" | ".join(tail[-3:]) or "拼接失败")
-    if not os.path.exists(out):
-        raise RuntimeError("没有生成成果文件")
 
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
-    with Image.open(out) as im:
-        w, h = im.size
-    return {"ok": True,
-            "file": os.path.relpath(out, base).replace("\\", "/"),
-            "w": w, "h": h,
-            "mb": round(os.path.getsize(out) / 1024 / 1024, 1)}
+
+    files = []
+    for q in qs:
+        # 档位名进文件名 —— 四档并存，一眼看出哪个是哪个
+        out = os.path.join(outdir, "拼图_%s.jpg" % LABEL[q])
+        cmd = [sys.executable, script, tmp, "-o", out, "--jpg"]
+        if SCALE[q] != 1.0:
+            cmd += ["-s", str(SCALE[q])]
+        r = subprocess.run(cmd, cwd=base, capture_output=True, text=True,
+                           encoding="gbk", errors="replace")
+        if r.returncode != 0:
+            tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            raise RuntimeError("生成「%s」失败：%s" % (
+                LABEL[q], " | ".join(tail[-3:]) or "未知原因"))
+        if not os.path.exists(out):
+            raise RuntimeError("「%s」没有生成成果文件" % LABEL[q])
+        with Image.open(out) as im:
+            w, h = im.size
+        files.append({"name": os.path.basename(out), "quality": LABEL[q],
+                      "w": w, "h": h,
+                      "mb": round(os.path.getsize(out) / 1024 / 1024, 1)})
+
+    return {"ok": True, "files": files,
+            "dir": os.path.relpath(outdir, base).replace("\\", "/")}
 
 
 def serve(html_path, base, port):
