@@ -51,6 +51,29 @@ def imwrite_png(path, arr):
     buf.tofile(path)
 
 
+def detect_color_ratio(img_bgr, sat_thr=150, val_thr=40):
+    """估算"内容有颜色"的像素占比，用于 crop.color: auto。
+
+    这里的关键是**阈值要取高**（S > 150），而不是随便取个 60。
+    实测两类扫描件：
+
+        湖北五万分一地形图（黑白+纸张泛黄）
+            S 均值 44~49,  S 中位 46~50,  S>150 占比 0.00%
+        民国全国交通图（整幅带色）
+            S 均值 71~82,  S 中位 74~77,  S>150 占比 0.75~4.30%
+
+    泛黄的纸张会让 S 升到 40~50，若阈值取 60 就会把所有泛黄老图都误判成彩色；
+    取 150 则只捕捉真正的内容着色（红蓝线条、彩色底纹），两类差值很大，分得开。
+
+    返回高饱和像素占比；判定阈值由 crop.color_sat_ratio 控制（默认 0.001）。
+    """
+    if img_bgr.ndim == 2:
+        return 0.0
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    s, v = hsv[:, :, 1], hsv[:, :, 2]
+    return float(((s > sat_thr) & (v > val_thr)).mean())
+
+
 # --------------------------------------------------------------------------- #
 #  1. 纠斜
 # --------------------------------------------------------------------------- #
@@ -281,7 +304,21 @@ def process_one(path, cfg, name):
         rec["out_size"] = "%dx%d" % (sz[0], sz[1])
 
     out = os.path.join(cfg["_crop_dir"], name + "_inner.png")
-    imwrite_png(out, cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
+
+    # 色彩: auto 按内容饱和度自动判断, 也可强制 grayscale / color。
+    # 默认 auto —— 地形图这类黑白扫描件会被压成灰度（省一半空间）,
+    # 而交通图、水系图这类**内容本身有颜色**的必须保留彩色, 否则颜色丢失。
+    cmode = str(c.get("color", "auto")).lower()
+    if cmode == "auto":
+        frac = detect_color_ratio(crop)
+        thr = float(c.get("color_sat_ratio", 0.001))
+        use_color = frac >= thr
+        rec["color"] = "%s(%.3f%%)" % ("color" if use_color else "gray", frac * 100)
+    else:
+        use_color = (cmode in ("color", "colour", "rgb", "true", "彩色"))
+        rec["color"] = "color" if use_color else "gray"
+
+    imwrite_png(out, crop if use_color else cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
 
     rec["inner"] = [int(x0), int(y0), int(x1), int(y1)]
     rec["flag"] = "safe" if rec.get("used_fallback") or rec.get("outer_rebuild") else "ok"

@@ -166,6 +166,25 @@ def main():
         print("  ... (--dry-run, 未写文件)")
         return 0
 
+    # 同图号重复检查 —— 必须在这里拦住。
+    # 清单按 sheet_no 索引(下面 merged[...]), 两个文件解析出同一个图号时
+    # 后一个会**静默覆盖**前一个: 清单少一条、VRT 里两幅的 DstRect 完全重叠
+    # 也只会显示其中一个, 而全程不报任何错。
+    # 实测就是这么丢掉过一幅图 —— 文件名 `2108-甲幅` 与 `2108-彩色测试`
+    # 同号, 结果彩色那幅凭空消失, 自查工具也查不出来(它比的是清单,
+    # 而清单里已经只剩一条了)。
+    dups = {}
+    for x in rows:
+        dups.setdefault(x["sheet_no"], []).append(x["file"])
+    dups = {k: v for k, v in dups.items() if len(v) > 1}
+    if dups:
+        print("[!] 有 %d 个图号对应多个文件 —— 清单只会保留最后一个，其余会被丢掉:" % len(dups))
+        for k in sorted(dups):
+            print("    %s : %s" % (k, " , ".join(dups[k])))
+        print("    它们在图幅网格上占同一格, 生成的 VRT 里也会互相覆盖。")
+        print("    请改掉重复的文件名（或把不需要的移出 input/）后重跑。")
+        return 1
+
     # 清单同样用合并写入 —— 只配准单幅时不能把其余几百条记录冲掉。
     man = os.path.join(geo_dir, "sheet_manifest.csv")
     merged = {}
@@ -188,22 +207,37 @@ def main():
             wr.writerow(merged[k])
     print("清单: %s  (累计 %d 条)" % (man, len(merged)))
 
-    prof_common = dict(driver="GTiff", count=1, dtype="uint8", crs="EPSG:4326",
+    prof_common = dict(driver="GTiff", dtype="uint8", crs="EPSG:4326",
                        compress=gr.get("compress", "DEFLATE"), tiled=True,
                        blockxsize=512, blockysize=512, nodata=nodata,
                        BIGTIFF="IF_SAFER")
     ovr = gr.get("overviews", [2, 4, 8, 16, 32])
 
     written = 0
+    n_gray = n_color = 0
     for x in rows:
-        arr = np.array(Image.open(x["src"]).convert("L"))
-        h, w = arr.shape
+        # 裁切产物可能是单波段灰度 PNG, 也可能是三波段彩色 PNG
+        # （01_crop.py 的 crop.color 决定）。这里按实际波段写 GeoTIFF,
+        # 不能一律转灰度 —— 否则交通图、水系图的颜色会被压掉。
+        im = Image.open(x["src"])
+        if im.mode in ("L", "1", "I;16"):
+            arr = np.array(im.convert("L"))
+            bands = 1
+            n_gray += 1
+        else:
+            arr = np.array(im.convert("RGB"))
+            bands = 3
+            n_color += 1
+        h, w = arr.shape[:2]
         dst = os.path.join(geo_dir, os.path.splitext(x["file"])[0] + "_geo.tif")
-        prof = dict(prof_common, height=h, width=w,
+        prof = dict(prof_common, count=bands, height=h, width=w,
                     transform=from_bounds(x["lon_min"], x["lat_min"],
                                           x["lon_max"], x["lat_max"], w, h))
         with rasterio.open(dst, "w", **prof) as d:
-            d.write(arr, 1)
+            if bands == 1:
+                d.write(arr, 1)
+            else:
+                d.write(np.moveaxis(arr, 2, 0))     # rasterio 要 band-first
             if ovr:
                 d.build_overviews(ovr, Resampling.average)
                 d.update_tags(ns="rio_overview", resampling="average")
@@ -212,6 +246,8 @@ def main():
             print("  已配准 %d/%d" % (written, len(rows)))
 
     print("配准完成 %d 幅 -> %s" % (written, geo_dir))
+    if n_color:
+        print("  其中 灰度 %d 幅 / 彩色 %d 幅（彩色写成三波段 GeoTIFF）" % (n_gray, n_color))
     return 0
 
 
