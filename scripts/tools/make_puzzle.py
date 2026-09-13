@@ -119,6 +119,13 @@ HTML = r"""<!DOCTYPE html>
   th,td{border:1px solid var(--line);padding:4px 8px;text-align:left}
   th{background:#f0f0ec}
   .stat{color:var(--dim);font-size:12px}
+  .qopts{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+  .qopts label{display:flex;align-items:baseline;gap:10px;padding:9px 12px;
+    border:1px solid var(--line);border-radius:7px;cursor:pointer}
+  .qopts label:hover{border-color:var(--accent)}
+  .qopts b{min-width:40px}
+  .qopts span{color:var(--dim);font-size:12px}
+  .qopts input{margin:0}
 </style>
 </head>
 <body>
@@ -135,7 +142,8 @@ HTML = r"""<!DOCTYPE html>
   </span>
   <button id="btnAuto">自动排布</button>
   <button id="btnClear">全部取回</button>
-  <button class="primary" id="btnExport" disabled>导出布局</button>
+  <button id="btnExport" disabled>导出布局</button>
+  <button class="primary" id="btnAssemble" disabled>一键生成拼图</button>
 </header>
 
 <div id="wrap">
@@ -150,6 +158,28 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <div id="hint"></div>
+
+<dialog id="dlgAsm">
+  <div class="dlg-h">一键生成拼图</div>
+  <div class="dlg-b">
+    <p class="stat">选一个清晰度，然后点下面的按钮。</p>
+    <div class="qopts">
+      <label><input type="radio" name="q" value="1" checked>
+        <b>预览</b><span>体积小、几秒钟，用来检查拼得对不对</span></label>
+      <label><input type="radio" name="q" value="2">
+        <b>清晰</b><span>适合在电脑上看、放进 PPT</span></label>
+      <label><input type="radio" name="q" value="3">
+        <b>打印</b><span>体积较大，适合打印</span></label>
+      <label><input type="radio" name="q" value="4">
+        <b>存档</b><span>原始分辨率，可能要等一会儿</span></label>
+    </div>
+    <div id="asmMsg" class="stat" style="margin-top:12px"></div>
+  </div>
+  <div class="dlg-f">
+    <button id="btnAsmCancel">关闭</button>
+    <button class="primary" id="btnAsmGo">开始生成</button>
+  </div>
+</dialog>
 
 <dialog id="dlg">
   <div class="dlg-h">布局结果</div>
@@ -183,6 +213,7 @@ const hintEl = document.getElementById('hint');
 let placed = {};          // name -> {el, col, row}
 let dragName = null, dragFrom = null, ghost = null, hoverCell = null;
 let dragOrigin = null;   // 从画布拖动时记下原位，供"拖到有图的格子 = 对调"用
+let ASSEMBLE_OK = false;  // 本地服务是否可用（决定"一键生成拼图"能否点）
 
 function hint(msg){
   hintEl.textContent = msg; hintEl.classList.add('on');
@@ -447,6 +478,8 @@ function sync(){
   const btn = document.getElementById('btnExport');
   btn.disabled = (n === 0);
   btn.textContent = n === total ? '导出布局' : `导出布局 (${n}/${total})`;
+  const ab = document.getElementById('btnAssemble');
+  if (ab) ab.disabled = (!ASSEMBLE_OK || n === 0);
 }
 
 /* ---------------- 导出 ---------------- */
@@ -477,6 +510,51 @@ document.getElementById('btnExport').onclick = ()=>{
   document.getElementById('dlg').showModal();
 };
 document.getElementById('btnClose').onclick = ()=>document.getElementById('dlg').close();
+
+/* ---------------- 一键生成拼图 ----------------
+   布局 POST 给本地服务，由它拼接并打开成果 —— 不用下载任何文件。 */
+const dlgAsm = document.getElementById('dlgAsm');
+const asmMsg = document.getElementById('asmMsg');
+
+document.getElementById('btnAssemble').onclick = ()=>{
+  if (!ASSEMBLE_OK){
+    hint('这个页面是直接打开的，没有本地服务 —— 请用「拼图工作台.bat」打开');
+    return;
+  }
+  asmMsg.textContent = '';
+  document.getElementById('btnAsmGo').disabled = false;
+  dlgAsm.showModal();
+};
+document.getElementById('btnAsmCancel').onclick = ()=>dlgAsm.close();
+
+document.getElementById('btnAsmGo').onclick = async ()=>{
+  const q = document.querySelector('input[name="q"]:checked').value;
+  const go = document.getElementById('btnAsmGo');
+  go.disabled = true;
+  asmMsg.textContent = '正在生成，请稍等……（幅数多时要一会儿）';
+  const L = buildLayout();
+  L.quality = parseInt(q, 10);
+  try {
+    const r = await fetch('/assemble', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(L)
+    });
+    const j = await r.json();
+    if (j.ok){
+      asmMsg.innerHTML = '✅ 拼好了：<b>' + j.file + '</b><br>' +
+        j.w + ' × ' + j.h + ' 像素　' + j.mb + ' MB<br>成果文件夹已打开。' +
+        '<br><br>想换个清晰度再来一次？直接改上面的选项再点按钮就行。';
+      go.disabled = false;        // 恢复按钮，方便换清晰度重生成
+    } else {
+      asmMsg.textContent = '生成失败：' + (j.error || '未知原因');
+      go.disabled = false;
+    }
+  } catch (e){
+    asmMsg.textContent = '连不上本地服务。请确认「拼图工作台.bat」的窗口还开着。';
+    go.disabled = false;
+  }
+};
 document.getElementById('btnCopy').onclick = async ()=>{
   const ta = document.getElementById('json');
   try { await navigator.clipboard.writeText(ta.value); hint('已复制到剪贴板'); }
@@ -506,6 +584,11 @@ window.addEventListener('resize', ()=>{ relayout(); });
 document.getElementById('gen').textContent =
   TILES.length + ' 幅 · 生成于 __GENTIME__';
 
+// 探测本地服务（直接双击 html 打开时没有服务，"一键"按钮要禁用）
+fetch('/ping').then(r => r.ok ? r.json() : Promise.reject())
+  .then(()=>{ ASSEMBLE_OK = true; sync(); })
+  .catch(()=>{ ASSEMBLE_OK = false; });
+
 buildTray(); sync(); relayout();
 window.addEventListener('dragover', e=>e.preventDefault());
 </script>
@@ -514,12 +597,155 @@ window.addEventListener('dragover', e=>e.preventDefault());
 """
 
 
+def do_assemble(base, layout):
+    """按布局拼接。layout 来自网页，含 quality 字段。
+
+    直接用 subprocess 跑 assemble_by_layout.py —— 逻辑只有一份，
+    不在这里重复实现，免得两边行为不一致。
+    """
+    import json as _json
+    import subprocess
+
+    quality = int(layout.pop("quality", 1))
+    SCALE = {1: 0.35, 2: 0.6, 3: 0.8, 4: 1.0}[quality]
+
+    tmp = os.path.join(base, "work", "_layout_from_page.json")
+    os.makedirs(os.path.dirname(tmp), exist_ok=True)
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        _json.dump(layout, f, ensure_ascii=False)
+
+    script = os.path.join(base, "scripts", "tools", "assemble_by_layout.py")
+    if not os.path.exists(script):
+        raise RuntimeError("找不到 assemble_by_layout.py")
+    outdir = os.path.join(base, "work", "03_assembly")
+    os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, "assembled.jpg")
+
+    cmd = [sys.executable, script, tmp, "-o", out, "--jpg"]
+    if SCALE != 1.0:
+        cmd += ["-s", str(SCALE)]
+
+    r = subprocess.run(cmd, cwd=base, capture_output=True, text=True,
+                       encoding="gbk", errors="replace")
+    if r.returncode != 0:
+        tail = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        raise RuntimeError(" | ".join(tail[-3:]) or "拼接失败")
+    if not os.path.exists(out):
+        raise RuntimeError("没有生成成果文件")
+
+    from PIL import Image
+    Image.MAX_IMAGE_PIXELS = None
+    with Image.open(out) as im:
+        w, h = im.size
+    return {"ok": True,
+            "file": os.path.relpath(out, base).replace("\\", "/"),
+            "w": w, "h": h,
+            "mb": round(os.path.getsize(out) / 1024 / 1024, 1)}
+
+
+def serve(html_path, base, port):
+    """起本地服务：网页点「一键生成拼图」-> 这里拼接 -> 打开成果。
+
+    只监听 127.0.0.1，不对外网开放。
+    """
+    import json as _json
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse
+
+    with open(html_path, encoding="utf-8") as f:
+        PAGE = f.read().encode("utf-8")
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass                                # 别把请求日志刷满屏幕
+
+        def _send(self, code, body, ctype="application/json; charset=utf-8"):
+            b = body if isinstance(body, bytes) else _json.dumps(
+                body, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            p = urlparse(self.path).path
+            if p in ("/", "/index.html", "/puzzle.html"):
+                self._send(200, PAGE, "text/html; charset=utf-8")
+            elif p == "/ping":
+                self._send(200, {"ok": True})
+            else:
+                self._send(404, {"ok": False, "error": "not found"})
+
+        def do_POST(self):
+            if urlparse(self.path).path != "/assemble":
+                self._send(404, {"ok": False, "error": "not found"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                L = _json.loads(self.rfile.read(n).decode("utf-8"))
+            except Exception as e:
+                self._send(400, {"ok": False, "error": "布局数据读不出来: %s" % e})
+                return
+            try:
+                res = do_assemble(base, L)
+                self._send(200, res)
+                outdir = os.path.join(base, "work", "03_assembly")
+                if os.path.isdir(outdir):       # 拼完自动打开成果文件夹
+                    try:
+                        os.startfile(outdir)
+                    except Exception:
+                        pass
+            except Exception as e:
+                self._send(200, {"ok": False, "error": str(e)})
+
+    srv = None
+    for p in range(port, port + 20):
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", p), H)
+            port = p
+            break
+        except OSError:
+            continue
+    if srv is None:
+        print("[!] 端口都被占用了，无法启动本地服务")
+        return 1
+
+    url = "http://127.0.0.1:%d/" % port
+    print()
+    print("=" * 62)
+    print("  拼图工作台已就绪")
+    print("=" * 62)
+    print()
+    print("  浏览器会自动打开；没打开就手动访问：")
+    print("      " + url)
+    print()
+    print("  在网页里摆好位置后点  「一键生成拼图」 就行了 ——")
+    print("  不用下载文件，也不用敲命令。")
+    print()
+    print("  [!] 这个窗口要一直开着，关掉网页就连不上了。")
+    print("      拼完回到这个窗口按 Ctrl+C 退出。")
+    print()
+    webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\n已退出。")
+    finally:
+        srv.server_close()
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="生成拼图工作台网页")
     ap.add_argument("-c", "--config", default="config.yaml")
     ap.add_argument("--thumb", type=int, default=260, help="缩略图宽度(px)")
     ap.add_argument("-o", "--out", default=None, help="输出 html 路径")
     ap.add_argument("--open", action="store_true", help="生成后打开浏览器")
+    ap.add_argument("--serve", action="store_true",
+                    help="生成后起本地服务，网页上可直接一键生成拼图")
+    ap.add_argument("--port", type=int, default=8765, help="本地服务端口")
     ap.add_argument("--from", dest="src", default=None,
                     help="图源目录（默认用配置里的裁切输出目录）")
     a = ap.parse_args()
@@ -588,6 +814,9 @@ def main():
     print("拼图工作台已生成: %s  (%.2f MB)" % (out, size_mb))
     print("  用浏览器打开它，把左侧缩略图拖到画布上摆成正确位置，")
     print("  然后点『导出布局』，把 JSON 存成 puzzle_layout.json。")
+    if a.serve:
+        return serve(out, base, a.port)
+
     if a.open:
         webbrowser.open("file:///" + out.replace("\\", "/"))
     return 0
