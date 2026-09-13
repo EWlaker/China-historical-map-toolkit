@@ -129,6 +129,13 @@ def main():
         print("[!] 文件名不符合规则, 已跳过 %d 个:" % len(skipped))
         for s in skipped[:10]:
             print("   ", s)
+        if len(skipped) > 10:
+            print("   ... 其余 %d 个未显示" % (len(skipped) - 10))
+        print("[!] 配准未完成：请修正文件名或 grid.filename_regex 后重试")
+        return 1
+
+    if not rows:
+        sys.exit("没有可配准的图幅：所有文件都不符合 grid.filename_regex")
 
     print("待配准 %d 幅   经度 %.4f~%.4f  纬度 %.4f~%.4f"
           % (len(rows),

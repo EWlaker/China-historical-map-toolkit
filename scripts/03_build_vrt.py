@@ -16,6 +16,7 @@ import argparse
 import csv
 import os
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import yaml
@@ -57,30 +58,30 @@ def write_vrt_xml(vrt_path, items, srs="EPSG:4326", nodata=255):
     H = int(round((north - south) / py))
     vdir = os.path.dirname(os.path.abspath(vrt_path))
 
-    L = ['<VRTDataset rasterXSize="%d" rasterYSize="%d">' % (W, H),
-         '  <SRS>%s</SRS>' % srs,
-         '  <GeoTransform>%.10f, %.10f, 0, %.10f, 0, %.10f</GeoTransform>'
-         % (west, px, north, -py),
-         '  <VRTRasterBand dataType="Byte" band="1">',
-         '    <NoDataValue>%s</NoDataValue>' % nodata,
-         '    <ColorInterp>Gray</ColorInterp>']
+    root = ET.Element("VRTDataset", rasterXSize=str(W), rasterYSize=str(H))
+    ET.SubElement(root, "SRS").text = str(srs)
+    ET.SubElement(root, "GeoTransform").text = (
+        "%.10f, %.10f, 0, %.10f, 0, %.10f" % (west, px, north, -py)
+    )
+    band = ET.SubElement(root, "VRTRasterBand", dataType="Byte", band="1")
+    ET.SubElement(band, "NoDataValue").text = str(nodata)
+    ET.SubElement(band, "ColorInterp").text = "Gray"
     for p, (w, s, e, n, sw, sh) in items:
         rel = os.path.relpath(os.path.abspath(p), vdir).replace("\\", "/")
         xo = int(round((w - west) / px))
         yo = int(round((north - n) / py))
-        L += ['    <SimpleSource>',
-              '      <SourceFilename relativeToVRT="1">%s</SourceFilename>' % rel,
-              '      <SourceBand>1</SourceBand>',
-              '      <SourceProperties RasterXSize="%d" RasterYSize="%d" DataType="Byte"/>'
-              % (sw, sh),
-              '      <SrcRect xOff="0" yOff="0" xSize="%d" ySize="%d"/>' % (sw, sh),
-              '      <DstRect xOff="%d" yOff="%d" xSize="%d" ySize="%d"/>'
-              % (xo, yo, sw, sh),
-              '    </SimpleSource>']
-    L += ['  </VRTRasterBand>', '</VRTDataset>', '']
+        src = ET.SubElement(band, "SimpleSource")
+        ET.SubElement(src, "SourceFilename", relativeToVRT="1").text = rel
+        ET.SubElement(src, "SourceBand").text = "1"
+        ET.SubElement(src, "SourceProperties", RasterXSize=str(sw),
+                      RasterYSize=str(sh), DataType="Byte")
+        ET.SubElement(src, "SrcRect", xOff="0", yOff="0",
+                      xSize=str(sw), ySize=str(sh))
+        ET.SubElement(src, "DstRect", xOff=str(xo), yOff=str(yo),
+                      xSize=str(sw), ySize=str(sh))
 
-    with open(vrt_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(L))
+    ET.indent(root, space="  ")
+    ET.ElementTree(root).write(vrt_path, encoding="utf-8", xml_declaration=True)
     return W, H
 
 
