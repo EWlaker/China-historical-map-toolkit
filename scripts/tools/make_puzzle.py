@@ -124,6 +124,7 @@ HTML = r"""<!DOCTYPE html>
 <body>
 <header>
   <h1>拼图工作台</h1>
+  <span class="stat" id="gen"></span>
   <span class="stat" id="stat"></span>
   <span class="sp"></span>
   <span class="zoombar">
@@ -181,6 +182,7 @@ const hintEl = document.getElementById('hint');
 
 let placed = {};          // name -> {el, col, row}
 let dragName = null, dragFrom = null, ghost = null, hoverCell = null;
+let dragOrigin = null;   // 从画布拖动时记下原位，供"拖到有图的格子 = 对调"用
 
 function hint(msg){
   hintEl.textContent = msg; hintEl.classList.add('on');
@@ -217,10 +219,33 @@ function place(name, col, row){
     resizeBoard();
     return;
   }
-  if (Object.values(placed).some(p=>p.col===col && p.row===row)){
-    hint('这一格已经有图了'); return;
+  // 目标格被别的图占着
+  const occ = Object.entries(placed).find(
+      ([n, q]) => q.col === col && q.row === row && n !== name);
+  if (occ){
+    if (dragFrom === 'board' && dragOrigin){
+      // 从画布上拖来的 -> **两幅对调位置**。
+      // 原来这里是直接 return，可调用方已经把自己删掉了，
+      // 于是那幅图凭空消失（用户报的"下面的会被覆盖掉"）。
+      const [oname, oq] = occ;
+      oq.col = dragOrigin.col; oq.row = dragOrigin.row;
+      layoutTile(oq);
+      hint('两幅已对调位置');
+      dragOrigin = null;
+    } else {
+      hint('这一格已经有图了'); return;
+    }
   }
+  dragOrigin = null;
   const t = tileOf(name);
+  if (!t){
+    // 找不到对应的图幅定义。**不能抛异常** —— 抛了会中断后面的渲染，
+    // 用户看到的是"图突然不见了"，控制台只有一行 JS 报错，无从判断。
+    // 测试时误传标签文字就踩到过这个：那幅图凭空消失。
+    hint('无法识别这个图幅，已忽略');
+    console.warn('place(): TILES 里没有', name);
+    return;
+  }
   const el = document.createElement('div');
   el.className = 'tile'; el.style.width = CELL+'px'; el.style.height = CELL+'px';
   el.draggable = true;
@@ -233,6 +258,7 @@ function place(name, col, row){
 
   el.addEventListener('dragstart', e=>{
     dragName = name; dragFrom = 'board';
+    dragOrigin = {col: p.col, row: p.row};      // 记住原位，供对调用
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', name);
     setTimeout(()=>el.style.opacity = .35, 0);
@@ -386,6 +412,7 @@ board.addEventListener('drop', e=>{
   if (dragFrom === 'board' && placed[name]){
     // 必须先摘掉 DOM 再删记录 —— 只删记录的话 place() 会以为是新图块而
     // 新建一个元素，旧元素留在原地变成幽灵图块（实测出现过同一幅两个）。
+    // 自己已摘除，但原位记在 dragOrigin 里，place() 用它和目标格的图对调。
     placed[name].el.remove();
     delete placed[name];
   }
@@ -475,6 +502,10 @@ document.addEventListener('keydown', e=>{
 
 window.addEventListener('resize', ()=>{ relayout(); });
 
+// 标题栏显示来源信息 —— 换图后忘了重新生成时，一眼能看出手里这份是旧的
+document.getElementById('gen').textContent =
+  TILES.length + ' 幅 · 生成于 __GENTIME__';
+
 buildTray(); sync(); relayout();
 window.addEventListener('dragover', e=>e.preventDefault());
 </script>
@@ -525,10 +556,32 @@ def main():
         if i % 20 == 0 or i == len(files):
             print("   %d/%d" % (i, len(files)))
 
+    import time as _t
+    stamp = _t.strftime("%m-%d %H:%M")
     html = HTML.replace("__TILES__", json.dumps(tiles, ensure_ascii=False))
+    html = html.replace("__GENTIME__", stamp)
     out = a.out or os.path.join(base, "puzzle.html")
+
+    # 已有旧文件时，报出它装了多少幅 —— 用户常忘记重新生成，
+    # 看到"覆盖了旧的 N 幅版本"就知道手里那份该换了。
+    prev_n = None
+    if os.path.exists(out):
+        try:
+            import re as _re
+            m = _re.search(r"const TILES = (\[.*?\]);",
+                           open(out, encoding="utf-8").read(), _re.S)
+            if m:
+                prev_n = len(json.loads(m.group(1)))
+        except Exception:
+            pass
+
     with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write(html)
+
+    if prev_n is not None:
+        # 幅数相同也要报 —— 换了一批数量相同但内容不同的图，同样会让
+        # 用户拿着旧页面找不着北。
+        print("  （已覆盖原有的拼图页面：旧版 %d 幅）" % prev_n)
 
     size_mb = os.path.getsize(out) / 1024 / 1024
     print()
