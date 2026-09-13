@@ -87,6 +87,21 @@ def main():
     base = cfgp.parent
     crop_dir = (base / cfg["paths"]["crop"]).resolve()
     geo_dir = (base / cfg["paths"]["geo"]).resolve()
+    input_dir = (base / cfg["paths"]["input"]).resolve()
+
+    # 清单的 file 列记录的是"原始扫描件的文件名"。
+    # 但这里只看得到裁切产物 *_inner.png, 原始扩展名已经丢了,
+    # 所以去 input 目录反查一次; 查不到就退回裁切产物名, 不再硬编码 .jpg。
+    RAW_EXT = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
+
+    def raw_filename(stem):
+        for ext in RAW_EXT:
+            if os.path.exists(os.path.join(input_dir, stem + ext)):
+                return stem + ext
+        for ext in RAW_EXT:
+            if os.path.exists(os.path.join(input_dir, stem + ext.upper())):
+                return stem + ext.upper()
+        return stem + "_inner.png"
 
     g, gr = cfg["grid"], cfg["georef"]
     rx = g["filename_regex"]
@@ -123,7 +138,7 @@ def main():
         w, s, e, n = apply_shift(w, s, e, n, shift, mpd)
         rows.append(dict(sheet_no=sheet_no, C=c, R=r, name=name,
                          lon_min=w, lat_min=s, lon_max=e, lat_max=n,
-                         file=stem + ".jpg", src=str(p)))
+                         file=raw_filename(stem), src=str(p)))
 
     if skipped:
         print("[!] 文件名不符合规则, 已跳过 %d 个:" % len(skipped))
