@@ -30,3 +30,16 @@ Thumbs.db
 .env
 .env.*
 credentials.json
+
+# ---------------------------------------------------------------------------
+# 拼图工作台的产物（含你自己的图幅缩略图，因人而异，不入库）
+puzzle.html
+puzzle_layout.json
+*_layout.csv
+
+# 临时输出与备份
+#   AI 跑命令时常用 _xxx.txt 存中间输出；config.yaml.bak 是改配置前的备份。
+#   这些都不是项目内容，容易被 git add -A 顺手带上去。
+_*.txt
+*.bak
+*.tmp
